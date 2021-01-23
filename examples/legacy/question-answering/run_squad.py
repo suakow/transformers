@@ -16,6 +16,12 @@
 """ Finetuning the library models for question-answering on SQuAD (DistilBERT, Bert, XLM, XLNet)."""
 
 
+"""
+Puri Version ! : -> For development !
+
+"""
+
+
 import argparse
 import glob
 import logging
@@ -659,7 +665,30 @@ def main():
     parser.add_argument("--server_port", type=str, default="", help="Can be used for distant debugging.")
 
     parser.add_argument("--threads", type=int, default=1, help="multiple threads for converting example to features")
-    args = parser.parse_args()
+    
+    """
+    ! Parsing arguments !
+    """
+    # args = parser.parse_args()
+
+    """
+    Parsing 
+    """
+    args = parser.parse_args([
+        '--model_type', 'bert',
+        '--model_name_or_path', 'Geotrend/bert-base-th-cased',
+        '--do_train', 
+        '--do_eval',
+        '--train_file', '/root/workspace/thesis_v2/sample_train.json',
+        '--predict_file', '/root/workspace/thesis_v2/sample_validate.json',
+        '--per_gpu_train_batch_size', '32',
+        '--learning_rate', '3e-5',
+        '--num_train_epochs', '2',
+        '--max_seq_length', '384',
+        '--doc_stride', '128',
+        '--output_dir', '/root/workspace/thesis_v2/debug_squad/geobert-th-new-v1/',
+        '--overwrite_output_dir'
+    ])
 
     if args.doc_stride >= args.max_seq_length - args.max_query_length:
         logger.warning(
