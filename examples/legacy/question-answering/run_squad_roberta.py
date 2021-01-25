@@ -515,6 +515,8 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
 def main(input_args: list) :
     parser = argparse.ArgumentParser()
 
+    # region default arguments
+
     # Required parameters
     parser.add_argument(
         "--model_type",
@@ -701,6 +703,8 @@ def main(input_args: list) :
 
     parser.add_argument("--threads", type=int, default=1, help="multiple threads for converting example to features")
     
+    # endregion
+
     """
     ! Parsing arguments !
     """
