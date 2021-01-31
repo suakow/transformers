@@ -44,14 +44,14 @@ input_args = [
         '--do_train', 
         '--do_eval',
         '--do_lower_case',
-        '--train_file', '/root/workspace/thesis/preprocessed_data/fold1_train_factoid.json',
-        '--predict_file', '/root/workspace/thesis/preprocessed_data/v2_factoid_fold1.json',
+        '--train_file', '/root/workspace/thesis/data/span_ex/fold1_train_factoid.json',
+        '--predict_file', '/root/workspace/thesis/data/span_ex/v2_factoid_fold1.json',
         '--per_gpu_train_batch_size', '64',
         '--learning_rate', '3e-5',
         '--num_train_epochs', '20',
         '--max_seq_length', '384',
         '--doc_stride', '128',
-        '--output_dir', '/root/workspace/thesis_v2/debug_squad/geobert-th-new-real-v1/',
+        '--output_dir', '/root/workspace/thesis/output/roberta-th-new-real-v1/',
         '--overwrite_output_dir'
     ]
 
@@ -392,6 +392,7 @@ def evaluate(args, model, tokenizer, prefix=""):
     logger.info("  Evaluation done in total %f secs (%f sec per example)", evalTime, evalTime / len(dataset))
 
     # Compute predictions
+    # Output in file here !
     output_prediction_file = os.path.join(args.output_dir, "predictions_{}.json".format(prefix))
     output_nbest_file = os.path.join(args.output_dir, "nbest_predictions_{}.json".format(prefix))
 
