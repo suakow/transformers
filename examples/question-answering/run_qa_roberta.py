@@ -20,10 +20,11 @@ Fine-tuning the library models for question answering.
 import logging
 import os
 import sys
+import json
 from dataclasses import dataclass, field
 from typing import Optional
 
-from datasets import load_dataset, load_metric
+from datasets import load_dataset, load_metric, Dataset, DatasetDict
 
 import transformers
 from trainer_qa import QuestionAnsweringTrainer
@@ -36,6 +37,7 @@ from transformers import (
     HfArgumentParser,
     PreTrainedTokenizerFast,
     TrainingArguments,
+    CamembertTokenizerFast,
     default_data_collator,
     set_seed,
 )
@@ -44,6 +46,30 @@ from utils_qa import postprocess_qa_predictions
 
 
 logger = logging.getLogger(__name__)
+
+input_args = [
+        '--model_name_or_path', 'airesearch/wangchanberta-base-att-spm-uncased',
+        '--do_train', 
+        '--do_eval',
+        '--train_file', '/root/workspace/thesis/data/span_ex/fold1_train_factoid.json',
+        '--validation_file', '/root/workspace/thesis/data/span_ex/v2_factoid_fold1.json',
+        '--per_gpu_train_batch_size', '48',
+        '--learning_rate', '3e-5',
+        '--num_train_epochs', '20',
+        '--max_seq_length', '416',
+        '--doc_stride', '128',
+        '--output_dir', '/root/workspace/thesis/output/run_qa-roberta-test-v1/',
+        '--overwrite_output_dir'
+    ]
+
+def get_dataset_dict(data_list: list) -> dict :
+    return {
+        'question_id' : [ _['paragraphs'][0]['qas'][0]['id'] for _ in data_list['data'] ],
+        'question' : [ _['paragraphs'][0]['qas'][0]['question'] for _ in data_list['data'] ],
+        'context' : [ _['paragraphs'][0]['context'] for _ in data_list['data'] ],
+        'article_id' : [ _['title'] for _ in data_list['data'] ],
+        'answers' : [ {'answer' : [_['paragraphs'][0]['qas'][0]['answers'][0]['text']], 'answer_begin_position' : [_['paragraphs'][0]['qas'][0]['answers'][0]['answer_start']]} for _ in data_list['data'] ],
+    }
 
 
 @dataclass
@@ -156,7 +182,7 @@ class DataTrainingArguments:
                 assert extension in ["csv", "json"], "`validation_file` should be a csv or a json file."
 
 
-def main():
+def main(args_list : list):
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
@@ -167,7 +193,7 @@ def main():
         # let's parse it to get our arguments.
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
-        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+        model_args, data_args, training_args = parser.parse_args_into_dataclasses(args_list)
 
     if (
         os.path.exists(training_args.output_dir)
@@ -209,17 +235,26 @@ def main():
     #
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
-    if data_args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        datasets = load_dataset(data_args.dataset_name, data_args.dataset_config_name)
-    else:
-        data_files = {}
-        if data_args.train_file is not None:
-            data_files["train"] = data_args.train_file
-        if data_args.validation_file is not None:
-            data_files["validation"] = data_args.validation_file
-        extension = data_args.train_file.split(".")[-1]
-        datasets = load_dataset(extension, data_files=data_files, field="data")
+    # if data_args.dataset_name is not None:
+    #     # Downloading and loading a dataset from the hub.
+    #     datasets = load_dataset(data_args.dataset_name, data_args.dataset_config_name)
+    # else:
+    #     data_files = {}
+    #     if data_args.train_file is not None:
+    #         data_files["train"] = data_args.train_file
+    #     if data_args.validation_file is not None:
+    #         data_files["validation"] = data_args.validation_file
+    #     extension = data_args.train_file.split(".")[-1]
+    #     datasets = load_dataset(extension, data_files=data_files, field="data")
+
+
+    train_ds = json.loads(open(data_args.train_file, 'r').read())
+    validate_ds = json.loads(open(data_args.validation_file, 'r').read())
+
+    train_dict = get_dataset_dict(train_ds)
+    validation_dict = get_dataset_dict(validate_ds)
+
+    datasets = DatasetDict({'train' : Dataset.from_dict(train_dict), 'validation': Dataset.from_dict(validation_dict)})
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
@@ -234,20 +269,30 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
-        cache_dir=model_args.cache_dir,
-        use_fast=True,
-        revision=model_args.model_revision,
-        use_auth_token=True if model_args.use_auth_token else None,
-    )
+
+    if model_args.model_name_or_path == 'airesearch/wangchanberta-base-att-spm-uncased' :
+        tokenizer = CamembertTokenizerFast.from_pretrained(
+            model_args.model_name_or_path,
+            revision='main',
+            model_max_length=data_args.max_seq_length,
+        )
+
+    else :
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
+            cache_dir=model_args.cache_dir,
+            use_fast=True,
+            revision=model_args.model_revision,
+            use_auth_token=True if model_args.use_auth_token else None,
+        )
+
     model = AutoModelForQuestionAnswering.from_pretrained(
         model_args.model_name_or_path,
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
         config=config,
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
-        use_auth_token=True if model_args.use_auth_token else None,
+        # use_auth_token=True if model_args.use_auth_token else None,
     )
 
     # Tokenizer check: this script requires a fast tokenizer.
@@ -264,6 +309,8 @@ def main():
         column_names = datasets["train"].column_names
     else:
         column_names = datasets["validation"].column_names
+
+    print(column_names)
     question_column_name = "question" if "question" in column_names else column_names[0]
     context_column_name = "context" if "context" in column_names else column_names[1]
     answer_column_name = "answers" if "answers" in column_names else column_names[2]
@@ -272,19 +319,98 @@ def main():
     pad_on_right = tokenizer.padding_side == "right"
 
     # Training preprocessing
+    # def prepare_train_features(examples):
+    #     # Tokenize our examples with truncation and maybe padding, but keep the overflows using a stride. This results
+    #     # in one example possible giving several features when a context is long, each of those features having a
+    #     # context that overlaps a bit the context of the previous feature.
+    #     tokenized_examples = tokenizer(
+    #         examples[question_column_name if pad_on_right else context_column_name],
+    #         examples[context_column_name if pad_on_right else question_column_name],
+    #         truncation="only_second" if pad_on_right else "only_first",
+    #         max_length=data_args.max_seq_length,
+    #         stride=data_args.doc_stride,
+    #         return_overflowing_tokens=True,
+    #         return_offsets_mapping=True,
+    #         padding="max_length" if data_args.pad_to_max_length else False,
+    #     )
+
+    #     # Since one example might give us several features if it has a long context, we need a map from a feature to
+    #     # its corresponding example. This key gives us just that.
+    #     sample_mapping = tokenized_examples.pop("overflow_to_sample_mapping")
+    #     # The offset mappings will give us a map from token to character position in the original context. This will
+    #     # help us compute the start_positions and end_positions.
+    #     offset_mapping = tokenized_examples.pop("offset_mapping")
+
+    #     # Let's label those examples!
+    #     tokenized_examples["start_positions"] = []
+    #     tokenized_examples["end_positions"] = []
+
+    #     for i, offsets in enumerate(offset_mapping):
+    #         # We will label impossible answers with the index of the CLS token.
+    #         input_ids = tokenized_examples["input_ids"][i]
+    #         cls_index = input_ids.index(tokenizer.cls_token_id)
+
+    #         # Grab the sequence corresponding to that example (to know what is the context and what is the question).
+    #         sequence_ids = tokenized_examples.sequence_ids(i)
+
+    #         # One example can give several spans, this is the index of the example containing this span of text.
+    #         sample_index = sample_mapping[i]
+    #         answers = examples[answer_column_name][sample_index]
+    #         # If no answers are given, set the cls_index as answer.
+    #         if len(answers["answer_start"]) == 0:
+    #             tokenized_examples["start_positions"].append(cls_index)
+    #             tokenized_examples["end_positions"].append(cls_index)
+    #         else:
+    #             # Start/end character index of the answer in the text.
+    #             start_char = answers["answer_start"][0]
+    #             end_char = start_char + len(answers["text"][0])
+
+    #             # Start token index of the current span in the text.
+    #             token_start_index = 0
+    #             while sequence_ids[token_start_index] != (1 if pad_on_right else 0):
+    #                 token_start_index += 1
+
+    #             # End token index of the current span in the text.
+    #             token_end_index = len(input_ids) - 1
+    #             while sequence_ids[token_end_index] != (1 if pad_on_right else 0):
+    #                 token_end_index -= 1
+
+    #             # Detect if the answer is out of the span (in which case this feature is labeled with the CLS index).
+    #             if not (offsets[token_start_index][0] <= start_char and offsets[token_end_index][1] >= end_char):
+    #                 tokenized_examples["start_positions"].append(cls_index)
+    #                 tokenized_examples["end_positions"].append(cls_index)
+    #             else:
+    #                 # Otherwise move the token_start_index and token_end_index to the two ends of the answer.
+    #                 # Note: we could go after the last offset if the answer is the last word (edge case).
+    #                 while token_start_index < len(offsets) and offsets[token_start_index][0] <= start_char:
+    #                     token_start_index += 1
+    #                 tokenized_examples["start_positions"].append(token_start_index - 1)
+    #                 while offsets[token_end_index][1] >= end_char:
+    #                     token_end_index -= 1
+    #                 tokenized_examples["end_positions"].append(token_end_index + 1)
+
+    #     return tokenized_examples
     def prepare_train_features(examples):
-        # Tokenize our examples with truncation and maybe padding, but keep the overflows using a stride. This results
+        # Bring from Huggingface : 
+        # (run_qa.py)
+        # https://github.com/huggingface/transformers/blob/v4.2.2/examples/question-answering/run_qa.py
+        #
+        # Tokenize our examples with truncation and padding, but keep the overflows using a stride. This results
         # in one example possible giving several features when a context is long, each of those features having a
         # context that overlaps a bit the context of the previous feature.
+        #         max_length=data_args.max_seq_length,
+        #         stride=data_args.doc_stride,
+        #         return_overflowing_tokens=True,
+        #         return_offsets_mapping=True,
         tokenized_examples = tokenizer(
-            examples[question_column_name if pad_on_right else context_column_name],
-            examples[context_column_name if pad_on_right else question_column_name],
+            examples["question" if pad_on_right else "context"],
+            examples["context" if pad_on_right else "question"],
             truncation="only_second" if pad_on_right else "only_first",
             max_length=data_args.max_seq_length,
             stride=data_args.doc_stride,
             return_overflowing_tokens=True,
             return_offsets_mapping=True,
-            padding="max_length" if data_args.pad_to_max_length else False,
+            padding="max_length",
         )
 
         # Since one example might give us several features if it has a long context, we need a map from a feature to
@@ -299,7 +425,7 @@ def main():
         tokenized_examples["end_positions"] = []
 
         for i, offsets in enumerate(offset_mapping):
-            # We will label impossible answers with the index of the CLS token.
+            # We will label impossible answers with the index of the <s> token.
             input_ids = tokenized_examples["input_ids"][i]
             cls_index = input_ids.index(tokenizer.cls_token_id)
 
@@ -308,15 +434,17 @@ def main():
 
             # One example can give several spans, this is the index of the example containing this span of text.
             sample_index = sample_mapping[i]
-            answers = examples[answer_column_name][sample_index]
+            answers = examples["answers"][sample_index]
             # If no answers are given, set the cls_index as answer.
-            if len(answers["answer_start"]) == 0:
+            if len(answers["answer_begin_position"]) == 0:
                 tokenized_examples["start_positions"].append(cls_index)
                 tokenized_examples["end_positions"].append(cls_index)
             else:
                 # Start/end character index of the answer in the text.
-                start_char = answers["answer_start"][0]
-                end_char = start_char + len(answers["text"][0])
+                start_char = answers["answer_begin_position"][0] 
+                end_char = start_char + len(answers["answer"][0]) + 1
+                #             start_char = answers["answer_begin_position"][0] - 3
+                #             end_char = start_char + len(answers["answer"][0]) - 1
 
                 # Start token index of the current span in the text.
                 token_start_index = 0
@@ -488,8 +616,8 @@ def main():
 
 def _mp_fn(index):
     # For xla_spawn (TPUs)
-    main()
+    main(input_args)
 
 
 if __name__ == "__main__":
-    main()
+    main(input_args)
